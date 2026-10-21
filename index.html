@@ -399,7 +399,9 @@ main{overflow-x:clip}
 .owner-row input{flex:1 1 180px;min-width:0;min-height:46px;padding:10px 12px;border:1.5px solid var(--rule);border-radius:10px;background:var(--paper);color:var(--ink);font:500 16px var(--f-body)}
 .owner-out{margin-top:16px;display:grid;gap:12px;justify-items:center}
 .owner-out canvas{width:min(70vw,240px);height:auto;border-radius:10px;box-shadow:var(--shadow-paper)}
-.owner-link{width:100%;font:500 12px/1.4 ui-monospace,Menlo,monospace;color:var(--ink-soft);overflow-wrap:anywhere;background:var(--paper-shade);border-radius:8px;padding:8px 10px;user-select:all}
+.owner-link{width:100%;font:500 12px/1.4 ui-monospace,Menlo,monospace;color:var(--ink-soft);overflow-wrap:anywhere;background:var(--paper-shade);border-radius:8px;padding:8px 10px;-webkit-user-select:all;user-select:all;cursor:text}
+.owner-note{min-height:1.4em;margin:0;font-size:14px;text-align:center;color:var(--ink-soft)}
+.owner-note.ok{color:#1F8A4C;font-weight:600}
 
 /* ---------- inside the invitation: ticker, big date, spotlight ---------- */
 .ticker{position:relative;z-index:1;width:106vw;margin:72px 0 0 -3vw;padding:12px 0;overflow:hidden;background:var(--blue);color:#fff;transform:rotate(-2.2deg);box-shadow:0 14px 30px -14px rgba(0,60,160,.55)}
@@ -1039,7 +1041,8 @@ body{background-image:radial-gradient(var(--desk-line) 1.3px,transparent 1.7px),
       <div class="owner-out" id="ownOut" hidden>
         <canvas id="ownQr" width="10" height="10" aria-label="QR код"></canvas>
         <div class="owner-link" id="ownLink"></div>
-        <div class="btns" style="margin-top:0;justify-content:center"><button class="btn" id="ownCopy" type="button">Сілтемені көшіру</button><button class="btn" id="ownSave" type="button" hidden>QR-ды сақтау</button></div>
+        <div class="btns" style="margin-top:0;justify-content:center"><button class="btn" id="ownCopy" type="button">Сілтемені көшіру</button><button class="btn" id="ownShare" type="button" hidden>Жіберу</button><button class="btn" id="ownSave" type="button" hidden>QR-ды сақтау</button></div>
+        <p class="owner-note" id="ownNote" aria-live="polite"></p>
       </div>
     </div>
   </footer>
@@ -2193,13 +2196,48 @@ $('#rsvpForm').addEventListener('submit', e => e.preventDefault());
       if (!base) { $('#ownOut').hidden = false; $('#ownLink').textContent = 'Сілтеме әлі қосылмаған.'; return; }
       const link = nm ? base + '#' + encodeName(nm) : base;
       lastSlug = nm ? nm.replace(/\s+/g, '-').slice(0, 30) : 'jalpy';
-      $('#ownOut').hidden = false; $('#ownLink').textContent = link;
+      $('#ownOut').hidden = false; $('#ownLink').textContent = link; $('#ownNote').textContent = '';
       await loadQr(); drawQr($('#ownQr'), link);
       $('#ownSave').hidden = !dl && !admin;
     };
     $('#ownMake').addEventListener('click', make);
     $('#ownName').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); make(); } });
-    $('#ownCopy').addEventListener('click', () => { const t = $('#ownLink').textContent; try { navigator.clipboard.writeText(t).then(() => { $('#ownCopy').textContent = 'Көшірілді'; setTimeout(() => { $('#ownCopy').textContent = 'Сілтемені көшіру'; }, 1600); }, () => {}); } catch (e) {} });
+    const note = (t, ok) => { const n = $('#ownNote'); n.textContent = t; n.classList.toggle('ok', !!ok); };
+    /* the link stays selected on screen, so it can always be copied by hand */
+    const selectLink = () => { try { const r = document.createRange(); r.selectNodeContents($('#ownLink')); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); } catch (e) {} };
+    /* old way: copy from a hidden text field (works in in-app browsers without the Clipboard API) */
+    const copyOld = t => {
+      const ta = document.createElement('textarea'); ta.value = t; ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;font-size:16px';
+      document.body.appendChild(ta);
+      let ok = false;
+      try { ta.focus({ preventScroll: true }); ta.select(); ta.setSelectionRange(0, t.length); ok = document.execCommand('copy'); } catch (e) {}
+      ta.remove(); return ok;
+    };
+    const copied = () => {
+      note('Көшірілді ✓ Енді WhatsApp-қа қойып жібере беріңіз.', true);
+      $('#ownCopy').textContent = 'Көшірілді ✓'; setTimeout(() => { $('#ownCopy').textContent = 'Сілтемені көшіру'; }, 1800);
+    };
+    const failed = () => { selectLink(); note('Телефон көшіруге рұқсат бермеді. Жоғарыдағы сілтемені басып тұрып, «Көшіру» таңдаңыз.'); };
+    $('#ownCopy').addEventListener('click', () => {
+      const t = $('#ownLink').textContent.trim();
+      if (!/^https?:/.test(t)) { note('Алдымен атын жазып, «Жасау» басыңыз.'); return; }
+      if (navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext) {
+        navigator.clipboard.writeText(t).then(copied, () => { copyOld(t) ? copied() : failed(); });
+      } else if (copyOld(t)) copied(); else failed();
+    });
+    $('#ownLink').addEventListener('click', selectLink);
+    /* phones: the system share sheet (WhatsApp, Telegram…); not inside the Claude frame, which does not allow it */
+    let top = true; try { top = window.top === window.self; } catch (e) { top = false; }
+    if (navigator.share && top) {
+      $('#ownShare').hidden = false;
+      $('#ownShare').addEventListener('click', () => {
+        const t = $('#ownLink').textContent.trim();
+        if (!/^https?:/.test(t)) { note('Алдымен атын жазып, «Жасау» басыңыз.'); return; }
+        const nm = $('#ownName').value.trim();
+        navigator.share({ title: 'Химия тимбилдингі · JU40', text: (nm ? 'Құрметті ' + nm + '! ' : '') + 'Сізді JU40 химия тимбилдингіне шақырамыз:', url: t }).catch(() => {});
+      });
+    }
     $('#ownSave').addEventListener('click', () => {
       const name = `shaqyru-${lastSlug}.png`;
       if (dl) { $('#ownQr').toBlob(b => { if (b) dl.save({ filename: name, data: b }).catch(() => {}); }, 'image/png'); return; }
